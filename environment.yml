@@ -1,0 +1,11 @@
+name: species-range
+
+dependencies:
+  - python>=3.7
+  - pandas
+  - geopandas
+  - tqdm
+  - beautifulsoup4
+  - requests
+  - gdal
+  - rasterio
