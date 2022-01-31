@@ -1,4 +1,3 @@
-from venv import create
 import pandas as pd
 from bs4 import BeautifulSoup
 import requests
@@ -14,6 +13,7 @@ import arcpy
 from sqlalchemy import create_engine
 import logging
 from dotenv import load_dotenv
+from datetime import datetime
 
 class SpeciesPipeline():
     def __init__(self):
@@ -146,6 +146,7 @@ class SpeciesPipeline():
             self.logger.debug(f"no shape files for {species}")
             return None
         
+        data_results = []
         for s_file in species_shapes:
             details = s_file[:-4].split("_")
             threshold = details[0]
@@ -164,7 +165,11 @@ class SpeciesPipeline():
             data['scenario'] = scenario
             data['species'] = species
             data = data.drop(columns=['gridcode'], axis=1)
-            return data
+            data = data.dissolve(by="species")
+            data_results.append(data)
+
+        data_results = gpd.GeoDataFrame(pd.concat(data_results), crs=data_results[0].crs).rename(columns={"Id": "species_id"})
+        return data_results
 
 
     def _load_species_data(self):
@@ -177,11 +182,30 @@ class SpeciesPipeline():
 
         result = [i for i in result if i is not None]
         all_data = gpd.GeoDataFrame(pd.concat(result), crs=result[0].crs).rename(columns={"Id": "species_id"})
-        all_data = all_data.dissolve(by="species")
         all_data['year'] = pd.to_datetime(all_data['year'], format="%Y")
+        all_data['area'] = all_data.geometry.area
         all_data = all_data.reset_index()
         engine = create_engine(f"postgresql://{os.getenv('USER')}:{os.getenv('PASS')}@{os.getenv('HOST')}:{os.getenv('PORT')}/{os.getenv('DB')}")
         all_data.to_postgis("speciesdata", engine, if_exists="replace")
+
+        # interesting aggregated statistics
+        print("total area covered by each species by year")
+        print(
+            all_data.groupby(["species", "year"])['area'].mean()
+        )
+
+        print("total area of trees predicted by each source for given year range")
+        start_time = 2030
+        end_time = 2090
+        step = 30
+        for i in range(start_time, end_time, step):
+            cdf = all_data[datetime(i,1,1) <= all_data['year']]
+            cdf = cdf[datetime(i + 30,1,1) >= cdf['year']]
+            print(f"range from {i} to {i + step} inclusive")
+            print(
+                cdf.groupby(["source"])['area'].mean()
+            )
+
 
     def setup(self):
         """
@@ -218,6 +242,7 @@ class SpeciesPipeline():
         """
         self.logger.info("loading the data")
         self._load_species_data()
+    
 
 if __name__=="__main__":
     load_dotenv(dotenv_path=".env")
