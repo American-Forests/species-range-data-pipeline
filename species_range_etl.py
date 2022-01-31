@@ -203,7 +203,7 @@ class SpeciesPipeline():
             cdf = cdf[datetime(i + 30,1,1) >= cdf['year']]
             print(f"range from {i} to {i + step} inclusive")
             print(
-                cdf.groupby(["source"])['area'].mean()
+                cdf.groupby(["source"])['area'].sum()
             )
 
 
