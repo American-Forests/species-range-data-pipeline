@@ -1,27 +1,31 @@
+from venv import create
 import pandas as pd
 from bs4 import BeautifulSoup
 import requests
 from zipfile import ZipFile, BadZipFile
 from osgeo import gdal
-import rasterio as rio
-from rasterio.features import shapes
 import geopandas as gpd
 import concurrent.futures
-import time
-# from tqdm import tqdm
+from multiprocessing import Pool
 import os
 import io
 import re
-# import fileinput
-# import concurrent.futures
-
+import arcpy
+from sqlalchemy import create_engine
+import logging
+from dotenv import load_dotenv
 
 class SpeciesPipeline():
     def __init__(self):
-        self.data_dir = os.path.join(os.getcwd(), "data")
+        """
+        Initializing the directories and logger for the species data pipeline
+        """
+        self.data_dir = os.path.join("Y:", "AmericanReLeaf", "SpeciesRange2")
         self.base_url = "http://charcoal.cnre.vt.edu"
         self.species_index_url = f"{self.base_url}/climate/species/speciesDist/"
         self.species_list_url = f"{self.species_index_url}/speciesList.txt"
+        logging.basicConfig(filename='logs/data-pipeline.log', level=logging.DEBUG)
+        self.logger = logging.getLogger()
     
     def _get_species_list(self):
         """
@@ -35,63 +39,89 @@ class SpeciesPipeline():
         species_list = list(species_list_df.hyphenated_name)
         return species_list
     
-    def _download_and_process_species_data(self, species_list):
-        start = time.time()
+    def _generate_species_folders(self, species):
+        """
+        setting up the folder structure for the data downloads
+        """
+        try:
+            os.makedirs(os.path.join(self.data_dir, "tif", species))
+        except FileExistsError:
+            self.logger.debug(f"tif folder already exists for {species}")
+        try:
+            os.makedirs(os.path.join(self.data_dir, "shapes", species))
+        except FileExistsError:
+            self.logger.debug(f"shapes folder already exists for {species}")
+        try:
+            os.makedirs(os.path.join(self.data_dir, "zipfiles", species))
+        except FileExistsError:
+            self.logger.debug(f"zipfiles folder already exists for {species}")
+        try:
+            os.makedirs(os.path.join(self.data_dir, "ascii", species))
+        except FileExistsError:
+            self.logger.debug(f"ascii folder already exists for {species}")
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
-            executor.map(self._download_species_data_helper, species_list)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
-            executor.map(self._process_species_data_helper, species_list)
-    
-        end = time.time()
-        print(f"processing took {end - start}")
+    def _convert_to_ASCII(self, species):
+        """
+        convert the raw txt files to ascii
+        """
+        species_ascii_path = os.path.join(self.data_dir, "ascii", species)
+        for ascii_file in os.listdir(species_ascii_path):
+            if ascii_file.endswith("asc"):
+                self.logger.debug(f"ascii file already exists for {species} {ascii_file}")
+                continue
+            ascii_path = os.path.join(species_ascii_path, ascii_file)
+            ascii_path_fixed = os.path.join(species_ascii_path, re.sub("txt", "asc", ascii_file))
+            os.rename(ascii_path, ascii_path_fixed)
+
     def _process_species_data_helper(self, species):
+        """
+        take ascii files, produce tif files
+        take the tif files and split into the various thresholds
+        convert the rasters to shapefiles
+        """
         species_ascii_path = os.path.join(self.data_dir, "ascii", species)
         species_tif_path = os.path.join(self.data_dir, "tif", species)
         species_shapes_path = os.path.join(self.data_dir, "shapes", species)
-        ascii_data = []
-        tif_data = []
-        shape_data = []
-        for ascii_file in os.listdir(species_ascii_path):
-            ascii_data.append(os.path.join(species_ascii_path, ascii_file))
-            tif_data.append(os.path.join(species_tif_path, re.sub("txt", "tif", ascii_file)))
-            shape_data.append(os.path.join(species_shapes_path, re.sub("txt", "shp", ascii_file)))
+        ascii_data = [file for file in os.listdir(species_ascii_path)]
+        tif_data = [re.sub("asc", "tif", file) for file in os.listdir(species_ascii_path)]
+        shape_data = [re.sub("asc", "shp", file) for file in os.listdir(species_ascii_path)]
 
+        cut_off_thresholds = [0.25, 0.5, 0.75]
         for a_file, t_file, s_data in zip(ascii_data, tif_data, shape_data):
             drv = gdal.GetDriverByName('GTiff')
-            ds_in = gdal.Open(a_file)
-            drv.CreateCopy(t_file, ds_in)
-            # mask = None
-            # with rio.open(t_file) as src:
-            #     image = src.read(1) 
-            #     image[image > 1] = 1
-            #     results = ({'properties': {'raster_val': v}, 'geometry': s} for s, v in shapes(image, mask=mask, transform=src.transform))
-            #     geoms = list(results)
-            #     gpd_polygonized_raster  = gpd.GeoDataFrame.from_features(geoms)
-            #     gpd_polygonized_raster.to_file(s_data)
+            asc_raster = os.path.join(species_ascii_path, a_file)
+            tif_raster = os.path.join(species_tif_path, t_file)
+            ds_in = gdal.Open(asc_raster)
+            drv.CreateCopy(tif_raster, ds_in)
+            raster_in = arcpy.sa.Raster(tif_raster)
+            for threshold in cut_off_thresholds:
+                raster_out_file = os.path.join(species_tif_path, f"clean_{int(threshold*100)}_{t_file}") 
+                outCon = arcpy.sa.Con(raster_in >= threshold, 0)
+                outCon.save(raster_out_file)
+                s_data_path = os.path.join(species_shapes_path, f"{int(threshold * 100)}_{s_data}")
+                arcpy.RasterToPolygon_conversion(raster_out_file, s_data_path)
+                temp = gpd.read_file(s_data_path)
+                temp = temp.set_crs(epsg=4326)
+                temp.to_file(s_data_path)
 
     def _download_species_data_helper(self, species):
-        try:
-            os.makedirs(os.path.join(self.data_dir, "zipfiles", species))
-            os.makedirs(os.path.join(self.data_dir, "ascii", species))
-            os.makedirs(os.path.join(self.data_dir, "tif", species))
-            os.makedirs(os.path.join(self.data_dir, "shapes", species))
-        except FileExistsError:
-            pass
+        """
+        download function that downloads all data for
+        a given species
+        """
         species_url = f"{self.species_index_url}/{species}"
         species_page = requests.get(species_url)
         species_soup = BeautifulSoup(species_page.content, 'html.parser')
         species_scenarios = species_soup.find_all(class_ = 'thumbnail-file-group')
-        errors = []
         for scenario in species_scenarios:
             scenario_name = scenario.find('h4').text
             if 'Image not available' in scenario.text: 
-                errors.append(['image not available', scenario_name])
+                self.logger.debug(f"image not available {species} {scenario_name}")
                 continue
             scenario_files = scenario.find(class_ = 'thumbnail-file-group-02').find_all('li')
             scenario_zip_file = f"{self.base_url}/{scenario_files[1].find('a')['href']}"
             scenario_zip = requests.get(scenario_zip_file)
-            scenario_zip_file_path = f"{self.data_dir}/zipfiles/{species}/{scenario_name}.zip"
+            scenario_zip_file_path = os.path.join(self.data_dir, "zipfiles", species, f"{scenario_name}.zip")
             with open(scenario_zip_file_path, 'wb') as output_file:
                 output_file.write(scenario_zip.content)
             try:
@@ -102,17 +132,97 @@ class SpeciesPipeline():
                         else:
                             zf.extract(f, path = os.path.join(self.data_dir, "ascii", species))
             except BadZipFile:
-                errors.append(['bad zip file', scenario_zip_file_path])
+                self.logger.debug(f"bad zip file {species} {scenario_zip_file_path}")
+        zip_path = os.path.join(self.data_dir, "zipfiles", species)
+        os.rmdir(zip_path)
+    
+    def _load_species_data_helper(self, species):
+        """
+        completes final data cleaning steps for the postgis database
+        """
+        species_shape_folder = os.path.join(self.data_dir, "shapes", species)
+        species_shapes = [i for i in os.listdir(species_shape_folder) if i.endswith(".shp")]
+        if not len(species_shapes):
+            self.logger.debug(f"no shape files for {species}")
+            return None
+        
+        for s_file in species_shapes:
+            details = s_file[:-4].split("_")
+            threshold = details[0]
+            if details[1] == "current":
+                source = "vtech"
+                scenario = "current"
+                year = "2020"
+            else:
+                source = details[1]
+                scenario = details[2]
+                year = details[3][1:]
+            data = gpd.read_file(os.path.join(species_shape_folder, s_file))
+            data['threshold'] = threshold
+            data['source'] = source
+            data['year'] = year
+            data['scenario'] = scenario
+            data['species'] = species
+            data = data.drop(columns=['gridcode'], axis=1)
+            return data
 
-    def scrape_data(self):
+
+    def _load_species_data(self):
         """
-        this is a harness function for scraping all of the data from the VT site
+        a wrapper function to parallelize the data loading
         """
-        print("generating_species_list")
-        species_list = self._get_species_list()
-        self._download_and_process_species_data(species_list)
+        self.logger.info("transforming the data into a dataframe")
+        with Pool(4) as process_pool:
+            result = process_pool.map(self._load_species_data_helper, self.species_list)
+
+        result = [i for i in result if i is not None]
+        all_data = gpd.GeoDataFrame(pd.concat(result), crs=result[0].crs).rename(columns={"Id": "species_id"})
+        all_data = all_data.dissolve(by="species")
+        all_data['year'] = pd.to_datetime(all_data['year'], format="%Y")
+        all_data = all_data.reset_index()
+        engine = create_engine(f"postgresql://{os.getenv('USER')}:{os.getenv('PASS')}@{os.getenv('HOST')}:{os.getenv('PORT')}/{os.getenv('DB')}")
+        all_data.to_postgis("speciesdata", engine, if_exists="replace")
+
+    def setup(self):
+        """
+        set up function to get the species list and data folders
+        """
+        self.logger.info("pulling down the species list")
+        self.species_list = self._get_species_list()
+        self.logger.info("generating the data folders")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+            executor.map(self._generate_species_folders, self.species_list)
+
+    def extract(self):
+        """
+        the extract step of the data pipeline
+        """
+        self.logger.info("downloading the data")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+            executor.map(self._download_species_data_helper, self.species_list)
+
+    def transform(self):
+        """
+        transformation step of the data pipeline
+        """
+        self.logger.info("converting the data from ascii to tif")
+        with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
+            executor.map(self._convert_to_ASCII, self.species_list)
+        self.logger.info("processing the data")
+        with Pool(4) as process_pool:
+            process_pool.map(self._process_species_data_helper, self.species_list)
+
+    def load(self):
+        """
+        loading the data into the database
+        """
+        self.logger.info("loading the data")
+        self._load_species_data()
 
 if __name__=="__main__":
-    print("creating pipeline")
+    load_dotenv(dotenv_path=".env")
     pipe = SpeciesPipeline()
-    pipe.scrape_data()
+    pipe.setup()
+    pipe.extract()
+    pipe.transform()
+    pipe.load()
