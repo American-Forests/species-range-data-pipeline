@@ -1,11 +1,21 @@
 name: species-range
 
+channels:
+  - esri
+  - conda-forge
+
 dependencies:
   - python>=3.7
+  - gdal
+  - sqlalchemy
+  - psycopg2
+  - geoalchemy2
   - pandas
   - geopandas
   - tqdm
   - beautifulsoup4
   - requests
   - gdal
-  - rasterio
+  - arcgis
+  - arcpy
+  - python-dotenv
