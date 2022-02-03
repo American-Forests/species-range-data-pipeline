@@ -235,23 +235,10 @@ class SpeciesPipeline:
         engine = create_engine(
             f"postgresql://{os.getenv('USER')}:{os.getenv('PASS')}@{os.getenv('HOST')}:{os.getenv('PORT')}/{os.getenv('DB')}"
         )
-        all_data.to_file(os.path.join(self.data_dir, 'all_species.shp'))
+        # all_data.to_file(os.path.join(self.data_dir, 'all_species.shp'))
+        all_data = all_data[all_data['species'] == "Alligator-juniper"]
         all_data.to_postgis("speciesdata", engine, if_exists="replace", index=True, index_label="sid", chunksize=5)
 
-        # interesting aggregated statistics
-        self.logger.info("calculating aggregate statistics")
-        print("total area covered by each species by year")
-        print(all_data.groupby(["species", "year", "source"])["area"].mean())
-
-        print("total area of trees predicted by each source for given year range")
-        start_time = 2030
-        end_time = 2090
-        step = 30
-        for i in range(start_time, end_time, step):
-            cdf = all_data[datetime(i, 1, 1) <= all_data["year"]]
-            cdf = cdf[datetime(i + 30, 1, 1) >= cdf["year"]]
-            print(f"range from {i} to {i + step} inclusive")
-            print(cdf.groupby(["source"])["area"].sum())
 
     def setup(self):
         """
