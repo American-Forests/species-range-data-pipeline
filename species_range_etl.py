@@ -236,7 +236,6 @@ class SpeciesPipeline:
             f"postgresql://{os.getenv('USER')}:{os.getenv('PASS')}@{os.getenv('HOST')}:{os.getenv('PORT')}/{os.getenv('DB')}"
         )
         # all_data.to_file(os.path.join(self.data_dir, 'all_species.shp'))
-        all_data = all_data[all_data['species'] == "Alligator-juniper"]
         all_data.to_postgis("speciesdata", engine, if_exists="replace", index=True, index_label="sid", chunksize=5)
 
 
