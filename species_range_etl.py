@@ -49,24 +49,14 @@ class SpeciesPipeline:
         """
         setting up the folder structure for the data downloads
         """
-        try:
-            os.makedirs(os.path.join(self.data_dir, "tif", species))
-        except FileExistsError:
-            self.logger.debug(f"tif folder already exists for {species}")
-        try:
-            os.makedirs(os.path.join(self.data_dir, "shapes", species))
-        except FileExistsError:
-            self.logger.debug(f"shapes folder already exists for {species}")
-        try:
-            os.makedirs(os.path.join(self.data_dir, "zipfiles", species))
-        except FileExistsError:
-            self.logger.debug(f"zipfiles folder already exists for {species}")
-        try:
-            os.makedirs(os.path.join(self.data_dir, "ascii", species))
-        except FileExistsError:
-            self.logger.debug(f"ascii folder already exists for {species}")
+        folder_categories =  [ "tif","shapes","zipfiles","ascii" ]
+        for category in folder_categories:
+            try:
+                os.makedirs(os.path.join(self.data_dir, category, species))
+            except FileExistsError:
+                self.logger.debug(f"{category} folder already exists for {species}")
 
-    def _convert_to_ASCII(self, species):
+    def _convert_to_ASCII_helper(self, species):
         """
         convert the raw txt files to ascii
         """
@@ -85,9 +75,7 @@ class SpeciesPipeline:
 
     def _convert_to_tif_helper(self, species):
         """
-        take ascii files, produce tif files
-        take the tif files and split into the various thresholds
-        convert the rasters to shapefiles
+        take ascii files, produce tif files, we need tif files to use arcpy libraries
         """
         species_ascii_path = os.path.join(self.data_dir, "ascii", species)
         species_tif_path = os.path.join(self.data_dir, "tif", species)
@@ -104,6 +92,10 @@ class SpeciesPipeline:
             drv.CreateCopy(tif_raster, ds_in)
 
     def _convert_to_shape_helper(self, species):
+        """
+        take the tif files and split into the various thresholds
+        convert the rasters to shapefiles
+        """
         species_tif_path = os.path.join(self.data_dir, "tif", species)
         species_shapes_path = os.path.join(self.data_dir, "shapes", species)
         cut_off_thresholds = [0.25, 0.5, 0.75]
@@ -263,7 +255,7 @@ class SpeciesPipeline:
         """
         self.logger.info("converting the data from txt to ascii")
         with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
-            executor.map(self._convert_to_ASCII, self.species_list)
+            executor.map(self._convert_to_ASCII_helper, self.species_list)
         self.logger.info("converting the data from ascii to tif")
         with concurrent.futures.ThreadPoolExecutor(max_workers=30) as executor:
             executor.map(self._convert_to_tif_helper, self.species_list)
@@ -284,6 +276,6 @@ if __name__ == "__main__":
     load_dotenv(dotenv_path=".env")
     pipe = SpeciesPipeline()
     pipe.setup()
-    # pipe.extract()
-    # pipe.transform()
+    pipe.extract()
+    pipe.transform()
     pipe.load()
