@@ -113,11 +113,15 @@ class SpeciesPipeline:
                 s_data_path = os.path.join(
                     species_shapes_path, f"{int(threshold * 100)}_{shape_file}"
                 )
+
+                # check if path exists to avoid duplicaton 
                 if os.path.exists(s_data_path):
                     print("skipping", s_data_path)
                     continue
 
+                # convert raster to threshold raster
                 outCon = arcpy.sa.Con(raster_in >= threshold, 0)
+                # save output to memory for debugging, eventually leave in memory
                 outCon.save(raster_out_file)
                 # convert raster to polygon
                 arcpy.RasterToPolygon_conversion(raster_out_file, s_data_path)
@@ -227,6 +231,7 @@ class SpeciesPipeline:
         engine = create_engine(
             f"postgresql://{os.getenv('USER')}:{os.getenv('PASS')}@{os.getenv('HOST')}:{os.getenv('PORT')}/{os.getenv('DB')}"
         )
+
         # all_data.to_file(os.path.join(self.data_dir, 'all_species.shp'))
         all_data.to_postgis("speciesdata", engine, if_exists="replace", index=True, index_label="sid", chunksize=5)
 
